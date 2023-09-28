@@ -1,0 +1,193 @@
+#!/usr/bin/bash
+
+# consts
+SCRIPT_NAME=pinforce
+# version code
+MAJOR=1
+MINOR=0
+PATCH=0
+VERSION_CODE=$((MAJOR * 100 + MINOR * 10 + PATCH))
+VERSION_NAME=v$MAJOR.$MINOR.$PATCH
+
+# colors
+LIGHT_GREEN="\033[92m"
+LIGHT_YELLOW="\033[93m"
+LIGHT_RED="\033[91m"
+LIGHT_BLUE="\033[94m"
+DEFAULT="\033[39m"
+CLEAR_LINE="\033[1K"
+MOVE_CURSOR_LEFT="\033[80D"
+
+# utility functions
+function log_info() {
+    echo -e "[${LIGHT_BLUE}INFO${DEFAULT}] $1" | tee -a $LOG
+}
+
+function log_pass() {
+    echo -e "[${LIGHT_GREEN}PASS${DEFAULT}] $1" | tee -a $LOG
+}
+
+function log_fail() {
+    echo -e "[${LIGHT_RED}FAIL${DEFAULT}] $1" | tee -a $LOG
+}
+
+function log_warn() {
+    echo -e "[${LIGHT_YELLOW}WARN${DEFAULT}] $1" | tee -a $LOG
+}
+
+function log_debug() {
+    if [ $VERBOSE -gt 0 ]; then
+        echo -e "[${LIGHT_YELLOW}DEBUG${DEFAULT}] $1" | tee -a $LOG
+    fi
+}
+
+function show_configuration() {
+    log_info "-------------- start of config --------------"
+    log_conf "Configuration file: $CONFIG_FILE"
+    log_info "--------------- end of config ---------------"
+}
+
+function check_environment() {
+    if [ -e $KEYBOARD_DEVICE ]; then
+        log_pass "HID device ($KEYBOARD_DEVICE) found"
+    else
+        log_fail "HID device ($KEYBOARD_DEVICE) not found"
+        abort
+    fi
+
+    if [ -f $HID_KEYBOARD ]; then
+        log_pass "hid-keyboard executable ($HID_KEYBOARD) found"
+    else
+        log_fail "hid-keyboard executable ($HID_KEYBOARD) not found. \nHint: You can configure an alternative location for this file with the HID_KEYBOARD variable in the config file."
+        exit 1
+    fi
+}
+
+function load_pins() {
+    length=$1
+
+    top_number=$((10 ** $length - 1))
+
+    if [ -f "$PIN_LIST" ]; then
+        log_info "Loading PIN list $PIN_LIST for $length digits"
+        # TODO: add validation
+        pins=($(cat $PIN_LIST))
+
+    fi
+    log_info "PIN list contains ${#pins[@]} PINs"
+}
+
+# send one key using HID device
+function send_key() {
+    if [ "$2" = "nodelay" ]; then
+        delay=0
+    else
+        delay=$DELAY_BETWEEN_KEYS
+    fi
+    log_debug "Sending key: $1 with delay: $delay"
+
+    if [ $DRY_RUN -eq 0 ]; then
+        echo "$1" | $HID_KEYBOARD $KEYBOARD_DEVICE keyboard 2>/dev/null
+        RET=$?
+    else
+        RET=0 # as if it succeeded
+    fi
+    sleep $delay
+}
+
+# entry
+
+# if [ -z "$1" ]; then
+#     echo "$VERSION_CODE - $VERSION_NAME" | tee -a $LOG
+#     exit 1
+# fi
+echo "$SCRIPT_NAME - $VERSION_NAME" | tee -a $LOG
+
+for i in "$@"; do
+    case $i in
+    -l=* | --length=*)
+        _pin_length="${i#*=}"
+        shift # past argument=value
+        ;;
+    -L=* | --list=*)
+        _pin_list="${i#*=}"
+        shift # past argument=value
+        ;;
+    -config=* | -c=* | --config=*)
+        _config="${i#*=}"
+        shift # past argument=value
+        ;;
+    -v=* | --verbose=*)
+        VERBOSE=1
+        ;;
+    -* | --*)
+        echo "Unknown option $i"
+        exit 1
+        ;;
+    *) ;;
+    esac
+done
+
+# load config file .pinforce
+if [[ -n "$_config" ]]; then
+    if [[ -f "$_config" ]]; then
+        log_info "Loaded configuration file: $_config"
+        source "$_config"
+        CONFIG_FILE="$_config"
+    else
+        log_fail "Unable to load configuration file: $_config"
+        abort
+    fi
+else
+    CONFIG_FILE="$SCRIPT_NAME.conf"
+    log_info "Loaded configuration file: $CONFIG_FILE"
+    source $CONFIG_FILE
+fi
+
+#----------------
+# config override
+#----------------
+
+if [[ -n "$_pin_length" ]]; then
+    PIN_LENGTH=$_pin_length
+fi
+if [[ -n "$_pin_list" ]]; then
+    PIN_LIST=$_pin_list
+fi
+
+# ----------
+# validation
+# ----------
+
+# pin length
+if [[ "$PIN_LENGTH" -gt 0 ]] && [[ "$PIN_LENGTH" -le 8 ]]; then
+    # log_info $PIN_LENGTH
+    echo -n
+    PIN_LIST="pins-$PIN_LENGTH.txt"
+else
+    log_fail "PIN length $PIN_LENGTH is invalid. Valid lengths are 1 to 8."
+fi
+
+# check pin list
+if [[ -f "$PIN_LIST" ]]; then
+    echo -n
+else
+    log_fail "$PIN_LIST is not a valid PIN LIST"
+    exit 1
+fi
+
+# if [[ $DRY_RUN -eq 1 ]]; then
+#     log_info "Dry run enabled"
+# fi
+
+load_pins $PIN_LENGTH
+
+if [[ $VERBOSE > 0 ]]; then
+    show_configuration
+fi
+
+# check environment
+log_info "checking environment"
+check_environment
+
+# TODO: emulate keyboard (in android) from laptop 
